@@ -1,0 +1,460 @@
+---
+title: "Final Version"
+author: "Yue Wu, Hanyue Zhang, Qiyi Chen"
+date: "11/9/2020"
+output: pdf_document
+---
+
+#  Libraries Used
+```{r, message=FALSE}
+library(readxl)
+library(caret)
+library(MLeval)
+library(ggcorrplot)
+```
+
+# Import Data
+```{r}
+# remove id column from training dataset
+training <- read.csv("/Users/apple/Downloads/ucla-stats101c-lec4/training.csv")[, -1]
+testing <- read.csv("/Users/apple/Downloads/ucla-stats101c-lec4/test.csv")
+```
+
+# Functions Used
+```{r}
+#######################
+### logistic model function
+### input: training and validation dataset
+### output: logistic model
+#######################
+fit_LR <- function(training, validation){
+  # k-fold cross-validation
+  train_control <- trainControl(method="cv", 
+                                number = 10, 
+                                classProbs = TRUE, 
+                                savePredictions = TRUE)
+  # fit logistic regression model to training data
+  LRfit <- train(class~., 
+                 data = training, 
+                 method = "multinom",
+                 preProc = c("center", "scale"),
+                 trControl = train_control,
+                 trace = FALSE)
+  LRfit
+}
+
+#######################
+### knn model function
+### input: training and validation dataset
+### output: knn model
+#######################
+fit_KNN <- function(training, validation){
+  # k-fold cross-validation
+  train_control <- trainControl(method="cv", 
+                                number = 10, 
+                                classProbs = TRUE, 
+                                savePredictions = TRUE)
+  # fit knn method to training data
+  KNNfit <- train(class~., 
+                data = training, 
+                method = 'knn',
+                preProc = c("center", "scale"),
+                trControl = train_control,
+                tuneGrid = expand.grid(k = seq(1, 50, by = 5)))
+  KNNfit
+}
+
+#######################
+### lda analysis function
+### input: training and validation dataset
+### output: lda model
+#######################
+fit_LDA <- function(training, validation){
+  # k-fold cross-validation
+  train_control <- trainControl(method="cv", 
+                                number = 10, 
+                                classProbs = TRUE, 
+                                savePredictions = TRUE)
+  # fit linear discriminant analysis
+  LDAfit <- train(class~., 
+                data = training, 
+                method = "lda",
+               preProc = c("center", "scale"),
+               trControl = train_control)
+  LDAfit
+}
+
+#######################
+### qda model function
+### input: training and validation dataset
+### output: qda model
+#######################
+fit_QDA <- function(training, validation){
+  # k-fold cross-validation
+  train_control <- trainControl(method="cv", 
+                                number = 10, 
+                                classProbs = TRUE, 
+                                savePredictions = TRUE)
+  # fit quadratic discriminant analysis
+  QDAfit <- train(class~., 
+                data = training, 
+                method = "qda",
+               preProc = c("center", "scale"),
+               trControl = train_control)
+  QDAfit
+}
+
+#######################
+### function to built correctness table
+### input: training dataset
+### output: number of correctly predicted NG, OG, and TSG
+#######################
+get_proportion <- function(training){
+  set.seed(123)
+  # split data into training and validation dataset
+  trainIndex <- createDataPartition(training$class, p = 0.7, list = FALSE)
+  train <- training[trainIndex,]
+  validation <- training[-trainIndex,]
+  
+  ### we have tested LR, LDA, QDA, and KNN method
+  ### majority of variables performed best with LR methods
+  
+  LRfit <- fit_LR(train, validation)
+  # KNNfit <- fit_KNN(train, validation)
+  # LDAit <- fit_LDA(train, validation)
+  # QDAfit <- fit_QDA(train, validation)
+  fit <- LRfit
+  # predict validation class
+  pred <- predict(fit, newdata = validation)
+  # corrected prediction
+  match <- pred[pred == validation$class]
+  # number of correctly predicted NG, OG, and TSG
+  c(sum(match == "NG"), sum(match == "OG"), sum(match == "TSG"))
+}
+
+#######################
+### function to return prediction accuracy proportion for each class
+### input: validation class prediction, accurate validation class
+### output: proportion of correctly predicted NG, OG, and TSG
+#######################
+each_accuracy <- function(result, answer) {
+  # correct predicted value
+  match <- result[result == answer]
+  # proportion
+  acc <- c(sum(match == 0)/sum(answer == 0), sum(match == 1)/sum(answer == 1), sum(match == 2)/sum(answer == 2))
+  names(acc) <- 0:2
+  acc
+}
+
+#######################
+### function to simulate score base on kaggle score evaluation
+### input: validation class prediction, accurate validation class
+### output: score
+#######################
+score <- function(result, answer) {
+  total <- sum(answer == 0) + sum(answer != 0) * 20
+  match <- result[result == answer]
+  (sum(match == 0) + sum(match != 0)*20)/total
+}
+```
+
+# Data Preprocessing
+
+## Basic Data Exploration and Check for Missing Informations
+```{r, results='hide'}
+dim(training)
+str(training)
+summary(training)
+
+# determine whether sales_train dataframe contains any NA/NULL in every column
+all(!is.na(training))
+all(!is.null(training))
+```
+
+## Feature Selection base on Multicollinearity
+```{r}
+# deleting potential outliers
+training <- training[-which(training$Missense_KB_Ratio >= 10000), ]
+training <- training[-which(training$Missense_Damaging_TO_Benign_Ratio >= 30), ]
+training <- training[-which(training$LOF_TO_Total_Ratio >= 0.8), ]
+
+valid_training <- training
+training_class_factor <- factor(ifelse(valid_training$class == 0,
+                                       "NG", 
+                                       ifelse(valid_training$class == 1,
+                                              "OG",
+                                              "TSG")))
+
+# evaluate the classification performance of every variable
+prop <- t(apply(valid_training[, -ncol(valid_training)], 2, function(x) {
+  get_proportion(data.frame(x, class = training_class_factor))
+}))
+# add column for sumof correctly predicted OG and TSG
+prop <- cbind(prop, prop[, 2] + prop[, 3])
+colnames(prop) <- c("Correct_NG", "Correct_OG", "Correct_TSG", "Correct_OG_TSG")
+
+# correlation plot
+corr <- cor(training)
+colnames(corr) <- 1:98; rownames(corr) <- 1:98
+ggcorrplot(corr, type = "lower", outline.col = "white")
+
+# check collinearity
+c <- cor(valid_training)
+h <- list()
+n <- colnames(c)[-ncol(c)]
+for(i in 1:(ncol(c)-1)){
+  if(length(n[abs(c[i, ]) >= 0.85 & c[i, ] != 1]) != 0){
+    h[[n[i]]] <- n[abs(c[i, ]) >= 0.85 & c[i, ] != 1]
+  }
+}
+
+### first delete variables have high collinearity with most number of correlated variables
+### then use prop as reference for deleting variables between two-variables selections
+
+# delected variables
+delete <- c("Broad_H3K9ac_percentage", 
+            "Broad_H3K4me2_percentage", 
+            "LOF_KB_Ratio",  
+            "LOF_TO_Benign_Ratio", 
+            "Splice_TO_Benign_Ratio", 
+            "Missense_TO_Silent_Ratio",
+            "Missense_TO_Benign_Ratio", 
+            "Missense_Damaging_TO_Benign_Ratio", 
+            "H3K79me2_width", 
+            "H3K27me3_width", 
+            "H3K4me1_width", 
+            "Broad_H3K36me3_percentage", 
+            "Broad_H3K4me3_percentage", 
+            "LOF_TO_Total_Ratio", 
+            "Missense_fraction",
+            "CNA_amplification",
+            "S50_score_replication_timing",
+            "Gene_expression_Minus_Z_score",
+            "Minus_Cell_proliferation_rate_CRISPR_KD",
+            "Promoter_hypomethylation_in_cancer",
+            "Gene_body_hypomethylation_in_cancer",
+            "Splice_TO_Total_Ratio",
+            "Broad_H3K4me1_percentage",
+            "Broad_H4K20me1_percentage")
+# update
+valid_training <- valid_training[, -which(colnames(valid_training) %in% delete)]
+```
+
+## Feature Selection base on Boxplot
+```{r}
+total <- colnames(valid_training)[-ncol(valid_training)]
+
+# delete variable 
+delete <- c("Silent_KB_Ratio",
+            "Missense_KB_Ratio",
+            "Silent_fraction",
+            "Frameshift_indel_fraction",
+            "Lost_start_and_stop_fraction",
+            "BioGRID_betweenness",
+            "intolerant_pRec",
+            "intolerant_pNull",
+            "ncRVIS")
+keeped <- total[!(total %in% delete)]
+
+par(mfrow = c(2, 5))
+# example of deleted variable boxplot
+boxplot(valid_training[, delete[1]] ~ valid_training$class,
+        ylab = delete[1],
+        xlab = "class",
+        col = "lightblue",
+        cex.labels = 0.8)
+boxplot(valid_training[, delete[2]] ~ valid_training$class,
+        ylab = delete[2],
+        xlab = "class",
+        col = "lightblue",
+        cex.labels = 0.8)
+boxplot(valid_training[, delete[3]] ~ valid_training$class,
+        ylab = delete[3],
+        xlab = "class",
+        col = "lightblue",
+        main = "Example of Deleted",
+        cex.main = 1,
+        cex.labels = 0.8)
+boxplot(valid_training[, delete[6]] ~ valid_training$class,
+        ylab = delete[6],
+        xlab = "class",
+        col = "lightblue",
+        cex.labels = 0.8)
+boxplot(valid_training[, delete[7]] ~ valid_training$class,
+        ylab = delete[7],
+        xlab = "class",
+        col = "lightblue",
+        cex.labels = 0.8)
+
+# example of keeped variable boxplot
+boxplot(valid_training[, keeped[8]] ~ valid_training$class,
+        ylab = keeped[8],
+        xlab = "class",
+        col = "pink",
+        cex.labels = 0.8)
+boxplot(valid_training[, keeped[21]] ~ valid_training$class,
+        ylab = keeped[21],
+        xlab = "class",
+        col = "pink",
+        cex.labels = 0.8)
+boxplot(valid_training[, keeped[33]] ~ valid_training$class,
+        ylab = keeped[33],
+        xlab = "class",
+        col = "pink",
+        main = "Example of Keeped",
+        cex.main = 1,
+        cex.labels = 0.8)
+boxplot(valid_training[, keeped[38]] ~ valid_training$class,
+        ylab = keeped[38],
+        xlab = "class",
+        col = "pink",
+        cex.labels = 0.8)
+boxplot(valid_training[, keeped[50]] ~ valid_training$class,
+        ylab = keeped[50],
+        xlab = "class",
+        col = "pink",
+        cex.labels = 0.8)
+
+# update
+valid_training <- valid_training[, c(keeped, "class")]
+```
+
+## Upsampling
+```{r, results='hide'}
+valid_training$class <- factor(ifelse(valid_training$class == 0, "NG", ifelse(valid_training$class == 1, "OG", "TSG")))
+
+# split data into training and validation
+set.seed(123)
+trainIndex <- createDataPartition(valid_training$class, p = 0.7, list = FALSE)
+imtraining <- valid_training[trainIndex, ]
+validation <- valid_training[-trainIndex, ]
+correct_result <- training$class[-trainIndex]
+
+# upsampling
+training_upSample <- upSample(x = imtraining[, -ncol(imtraining)], y = imtraining$class)
+
+upsampling_prop <- c(sum(training_upSample$Class == "NG"), sum(training_upSample$Class == "OG"), sum(training_upSample$Class == "TSG")) / nrow(training_upSample)
+names(upsampling_prop) <- c("NG", "OG", "TSG")
+prop.table(table(imtraining$class))
+upsampling_prop
+```
+
+## Feature Selection base on Variable Significance
+```{r}
+t <- training_upSample
+t$Class <- as.numeric(t$Class)-1
+# delete variables base on the p-value significance
+summary(glm(Class~., data = t))
+
+delete <- c("N_LOF", 
+            "N_Splice", 
+            "Missense_Damaging_TO_Missense_Benign_Ratio", 
+            "Polyphen2", 
+            "Missense_TO_Total_Ratio", 
+            "Nonsense_fraction", 
+            "Exon_Cons", 
+            "BioGRID_clossness", 
+            "Promoter_hypermethylation_in_cancer", 
+            "Gene_body_hypermethylation_in_cancer", 
+            "intolerant_pLI", 
+            "Missense_Zscore", 
+            "dN_to_dS_ratio", 
+            "ncGERP", 
+            "Length_H3K4me3", 
+            "H3K4me3_height", 
+            "H3K4me1_height", 
+            "H3K36me3_height", 
+            "H3K9me3_height", 
+            "H3K9ac_height", 
+            "H3K79me2_height", 
+            "H4K20me1_height")
+
+training_upSample <- training_upSample[, -which(colnames(training_upSample) %in% delete)]
+
+# selected variables
+colnames((training_upSample))[-ncol(training_upSample)]
+```
+
+# Model
+
+## Validation
+```{r}
+# k-fold cross-validation
+train_control <- trainControl(method="cv", 
+                              number = 10, 
+                              classProbs = TRUE, 
+                              savePredictions = TRUE)
+
+# evaluate the classification performance of LR, KNN, LAD, QDA on training data
+LRfit <- train(Class~.,
+               data = training_upSample, 
+               method = "multinom",
+               preProc = c("center", "scale"),
+               trControl = train_control,
+               trace = FALSE)
+KNNfit <- train(Class~., 
+                data = training_upSample,
+                method = 'knn',
+                preProc = c("center", "scale"),
+                trControl = train_control,
+                tuneGrid = expand.grid(k = seq(1, 50, by = 5)))
+
+LDAfit <- train(Class~., 
+                data = training_upSample, 
+                method = "lda",
+               preProc = c("center", "scale"),
+               trControl = train_control)
+
+# evaluate using ROC curves
+res <- evalm(list(KNNfit, LRfit, LDAfit), gnames = c('KNN','LR', 'LDA'))
+res$roc
+### choose logistic regression
+
+# predict on validation
+result_train <- as.numeric(predict(LRfit, newdata = validation)) - 1
+
+# evaluation metric value 
+each_accuracy(result_train, correct_result)
+# simulate score base on kaggle score evaluation
+score(result_train, correct_result)
+```
+
+## Testing
+```{r}
+# predict on testing data
+result <- as.numeric(predict(LRfit, newdata = testing[, -1])) - 1
+result <- data.frame(id = testing$id, class = result)
+
+# number of predicted NG, OG, TSG
+table(result$class)
+# proportion of predicted NG, OG, TSG
+prop.table(table(result$class))
+write.csv(result, "sample.csv", row.names = FALSE)
+```
+
+
+## Alternative Model
+```{r}
+alternative_var_21 <- c("N_Missense",
+                        "N_LOF",
+                        "Missense_KB_Ratio",
+                        "Missense_Entropy",
+                        "LOF_TO_Silent_Ratio",
+                        "Missense_Damaging_TO_Benign_Ratio",
+                        "LOF_TO_Total_Ratio", 
+                        "VEST_score",
+                        "BioGRID_betweenness",
+                        "BioGRID_clossness",
+                        "BioGRID_log_degree",
+                        "pLOF_Zscore",
+                        "Length_H3K4me3",
+                        "H3K4me1_width",
+                        "H3K36me3_width",
+                        "H3K27ac_height",
+                        "Broad_H3K9ac_percentage",
+                        "H3K9ac_height",
+                        "Broad_H3K79me2_percentage",
+                        "H4K20me1_width",
+                        "H4K20me1_height")
+```
+
